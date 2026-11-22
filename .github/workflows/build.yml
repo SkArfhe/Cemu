@@ -180,6 +180,8 @@ jobs:
             inputs.next_version_minor }}-windows-x64-installer.exe
 
   build-macos:
+    # macOS runners are not available to this fork, so these jobs only ever got cancelled
+    if: github.repository_owner != 'SkArfhe'
     runs-on: macos-14
     strategy:
       matrix:

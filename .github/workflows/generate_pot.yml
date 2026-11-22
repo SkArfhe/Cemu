@@ -17,6 +17,9 @@ on:
 
 jobs:
   generate-pot:
+    # Fails in this fork: the kotlinx-gettext compiler plugin is incompatible with the
+    # project's Kotlin version. Re-enable once upstream updates the plugin.
+    if: github.repository_owner != 'SkArfhe'
     runs-on: ubuntu-24.04
     steps:
       - name: "Checkout repo"
