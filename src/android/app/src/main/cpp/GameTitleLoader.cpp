@@ -37,7 +37,13 @@ void GameTitleLoader::ReloadGameTitles()
 	{
 		CafeTitleList::UnregisterCallback(m_callbackIdTitleList.value());
 	}
-	m_gameInfos.clear();
+	{
+		// m_gameInfos belongs to the loader thread, which may be refreshing a title right now.
+		// Drop the pending queue and let that thread clear its own state before the next title.
+		std::lock_guard lock(m_threadMutex);
+		m_titlesToLoad.clear();
+		m_clearGameInfos = true;
+	}
 	CafeTitleList::ClearScanPaths();
 	for (auto&& gamePath : GetConfig().game_paths)
 		CafeTitleList::AddScanPath(gamePath);
@@ -95,8 +101,14 @@ void GameTitleLoader::TitleRefresh(TitleId titleId)
 			game.lastPlayed = year_month_day(year(playTimeStat.last_played.year), month(playTimeStat.last_played.month + 1), day(playTimeStat.last_played.day));
 		}
 	}
-	if (m_gameTitleLoadedCallback)
-		m_gameTitleLoadedCallback->OnTitleLoaded(game, icon);
+	std::shared_ptr<GameTitleLoadedCallback> callback;
+	{
+		// SetOnTitleLoaded can replace the callback from another thread at any time
+		std::lock_guard lock(m_threadMutex);
+		callback = m_gameTitleLoadedCallback;
+	}
+	if (callback)
+		callback->OnTitleLoaded(game, icon);
 }
 
 void GameTitleLoader::LoadGameTitles()
@@ -104,6 +116,7 @@ void GameTitleLoader::LoadGameTitles()
 	while (m_continueLoading)
 	{
 		TitleId titleId;
+		bool clearGameInfos;
 		{
 			std::unique_lock lock(m_threadMutex);
 			m_condVar.wait(lock, [this] { return (!m_titlesToLoad.empty()) || !m_continueLoading; });
@@ -111,7 +124,10 @@ void GameTitleLoader::LoadGameTitles()
 				return;
 			titleId = m_titlesToLoad.front();
 			m_titlesToLoad.pop_front();
+			clearGameInfos = std::exchange(m_clearGameInfos, false);
 		}
+		if (clearGameInfos)
+			m_gameInfos.clear();
 		TitleRefresh(titleId);
 	}
 }

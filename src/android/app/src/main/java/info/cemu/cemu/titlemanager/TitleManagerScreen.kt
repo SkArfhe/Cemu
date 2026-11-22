@@ -135,9 +135,6 @@ fun TitleManagerScreen(
                 context = context,
                 uri = uri,
                 onResult = { result ->
-                    {
-                        val x = 20
-                    }
                     when (result) {
                         CompressResult.FINISHED -> showNotificationMessage(tr("Finished converting"))
                         CompressResult.ERROR -> showNotificationMessage(tr("Error while converting"))

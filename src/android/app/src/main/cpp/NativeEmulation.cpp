@@ -175,8 +175,8 @@ namespace NativeEmulation
 			m_surfaceTexture = env->NewGlobalRef(localSurfaceTexture);
 			m_surface = env->NewGlobalRef(localSurface);
 
+			// already acquired by ANativeWindow_fromSurface, released once in the destructor
 			m_window = ANativeWindow_fromSurface(env, m_surface);
-			ANativeWindow_acquire(m_window);
 
 			env->DeleteLocalRef(localSurfaceTexture);
 			env->DeleteLocalRef(localSurface);
@@ -279,8 +279,10 @@ Java_info_cemu_cemu_nativeinterface_NativeEmulation_setSurface(JNIEnv* env, [[ma
 		auto oldWindow = windowHandleInfo.surface.load();
 		if (oldWindow != nullptr)
 			ANativeWindow_release(static_cast<ANativeWindow*>(oldWindow));
+		// ANativeWindow_fromSurface already returns an acquired reference, which is
+		// released above when the surface is replaced. Acquiring it a second time
+		// leaked one window reference every time the app went to the background.
 		auto newSurface = ANativeWindow_fromSurface(env, surface);
-		ANativeWindow_acquire(newSurface);
 		windowHandleInfo.surface = newSurface;
 		windowHandleInfo.surface.notify_all();
 	});

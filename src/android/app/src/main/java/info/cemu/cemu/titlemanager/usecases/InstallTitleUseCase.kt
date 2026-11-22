@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.io.File
+import java.io.IOException
 import java.nio.file.Path
 import java.util.LinkedList
 import kotlin.coroutines.cancellation.CancellationException
@@ -87,14 +88,17 @@ class InstallTitleUseCase(
                     targetLocation = targetLocation,
                 )
 
-                if (totalSize > mlcPath.toFile().freeSpace) {
+                // usableSpace excludes blocks reserved for the system, unlike freeSpace
+                if (totalSize > mlcPath.toFile().usableSpace) {
                     callback(InstallResult.NOT_ENOUGH_SPACE)
                     return@launch
                 }
 
                 backupFile.deleteRecursively()
-                if (installFile.exists())
-                    installFile.renameTo(backupFile)
+                // If the existing install cannot be moved aside, copying on top of it and then
+                // cleaning up after a failure would delete the user's original install.
+                if (installFile.exists() && !installFile.renameTo(backupFile))
+                    throw IOException("Failed to back up existing install at $installFile")
 
                 installStarted = true
                 _progress.value = 0L to totalSize
@@ -104,10 +108,13 @@ class InstallTitleUseCase(
                     yield()
                     when (file) {
                         is DirEntry.Dir -> file.destinationPath.createDirectories()
-                        is DirEntry.File -> contentResolver.openInputStream(
-                            file.uri
-                        )?.use {
-                            copyInputStreamToFile(it, file.destinationPath, buffer)
+                        is DirEntry.File -> {
+                            // a null stream used to skip the file silently and report success
+                            val inputStream = contentResolver.openInputStream(file.uri)
+                                ?: throw IOException("Failed to open ${file.uri}")
+                            inputStream.use {
+                                copyInputStreamToFile(it, file.destinationPath, buffer)
+                            }
                             bytesWritten += file.size
                             _progress.value = bytesWritten to totalSize
                         }

@@ -31,6 +31,7 @@ class GameTitleLoader
 	std::thread m_loaderThread;
 	std::atomic_bool m_continueLoading = true;
 	std::deque<TitleId> m_titlesToLoad;
+	bool m_clearGameInfos = false; // guarded by m_threadMutex
 	std::optional<uint64> m_callbackIdTitleList;
 	std::map<TitleId, Game> m_gameInfos;
 	std::map<TitleId, std::shared_ptr<Image>> m_iconCache;

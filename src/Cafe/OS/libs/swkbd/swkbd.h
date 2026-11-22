@@ -12,7 +12,8 @@ namespace swkbd
 	class swkbdCallbacks
 	{
 	  public:
-		virtual void showSoftwareKeyboard(const std::string& initialText, sint32 maxLength) = 0;
+		// initialText is UTF-16, the same encoding the game uses for its text buffer
+		virtual void showSoftwareKeyboard(const std::u16string& initialText, sint32 maxLength) = 0;
 		virtual void hideSoftwareKeyboard() = 0;
 	};
 

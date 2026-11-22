@@ -59,7 +59,13 @@ class CompressTitleUseCase(private val scope: CoroutineScope) {
     ) {
         if (_stage.value != null) return
 
-        val fd = context.contentResolver.openFileDescriptor(uri, "rw")
+        // openFileDescriptor throws (instead of returning null) when the provider
+        // cannot open the document, which used to crash the app
+        val fd = try {
+            context.contentResolver.openFileDescriptor(uri, "rw")
+        } catch (_: Exception) {
+            null
+        }
 
         if (fd == null) {
             callback(CompressResult.ERROR)
