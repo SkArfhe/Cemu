@@ -137,8 +137,12 @@ object NativeGameTitles {
     }
 
     @Keep
-    fun interface GameTitleLoadedCallback {
+    interface GameTitleLoadedCallback {
+        /** Called for new games and again when an existing game changes (update/DLC installed). */
         fun onGameTitleLoaded(game: Game)
+
+        /** Called when a game's base title is no longer available. */
+        fun onGameTitleRemoved(titleId: Long)
     }
 
     @Keep

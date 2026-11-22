@@ -130,7 +130,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getDriverSettingForTitle(JN
 	jstring customPath = nullptr;
 	if (driverSetting.customPath.has_value())
 	{
-		customPath = env->NewStringUTF(driverSetting.customPath.value().c_str());
+		customPath = JNIUtils::ToJString(env, driverSetting.customPath.value());
 	}
 
 	jint mode = static_cast<jint>(driverSetting.mode);
@@ -194,8 +194,9 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_setGameTitleLoadedCallback(
 	}
 	jclass gameTitleLoadedCallbackClass = env->GetObjectClass(game_title_loaded_callback);
 	jmethodID onGameTitleLoadedMID = env->GetMethodID(gameTitleLoadedCallbackClass, "onGameTitleLoaded", "(Linfo/cemu/cemu/nativeinterface/NativeGameTitles$Game;)V");
+	jmethodID onGameTitleRemovedMID = env->GetMethodID(gameTitleLoadedCallbackClass, "onGameTitleRemoved", "(J)V");
 	env->DeleteLocalRef(gameTitleLoadedCallbackClass);
-	NativeGameTitles::s_gameTitleLoader.SetOnTitleLoaded(std::make_shared<AndroidGameTitleLoadedCallback>(onGameTitleLoadedMID, game_title_loaded_callback));
+	NativeGameTitles::s_gameTitleLoader.SetOnTitleLoaded(std::make_shared<AndroidGameTitleLoadedCallback>(onGameTitleLoadedMID, onGameTitleRemovedMID, game_title_loaded_callback));
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
@@ -497,8 +498,10 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_queueTitleToCompress(JNIEnv
 			jobject title = env->GetObjectArrayElement(titlesJava, i);
 			uint64 uid = env->GetLongField(title, titleUIDFieldId);
 			uint16 version = env->GetShortField(title, versionFieldId);
+			env->DeleteLocalRef(title);
 			titles.push_back(Title{.uid = uid, .version = version});
 		}
+		env->DeleteLocalRef(titlesJava);
 		return titles;
 	};
 

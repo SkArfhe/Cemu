@@ -7,6 +7,7 @@
 class AndroidGameTitleLoadedCallback : public GameTitleLoadedCallback
 {
 	jmethodID m_onGameTitleLoadedMID;
+	jmethodID m_onGameTitleRemovedMID;
 	JNIUtils::Scopedjobject m_gameTitleLoadedCallbackObj;
 	jmethodID m_gameConstructorMID;
 	JNIUtils::Scopedjclass m_gamejclass{"info/cemu/cemu/nativeinterface/NativeGameTitles$Game"};
@@ -15,8 +16,9 @@ class AndroidGameTitleLoadedCallback : public GameTitleLoadedCallback
 	JNIUtils::Scopedjobject m_bitmapFormat;
 
   public:
-	AndroidGameTitleLoadedCallback(jmethodID onGameTitleLoadedMID, jobject gameTitleLoadedCallbackObj)
+	AndroidGameTitleLoadedCallback(jmethodID onGameTitleLoadedMID, jmethodID onGameTitleRemovedMID, jobject gameTitleLoadedCallbackObj)
 		: m_onGameTitleLoadedMID(onGameTitleLoadedMID),
+		  m_onGameTitleRemovedMID(onGameTitleRemovedMID),
 		  m_gameTitleLoadedCallbackObj(gameTitleLoadedCallbackObj)
 	{
 		JNIEnv* env = JNIUtils::GetEnv();
@@ -29,7 +31,8 @@ class AndroidGameTitleLoadedCallback : public GameTitleLoadedCallback
 	{
 		JNIEnv* env = JNIUtils::GetEnv();
 		jstring name = JNIUtils::ToJString(env, game.name);
-		jstring path = game.path.has_value() ? JNIUtils::ToJString(env, game.path.value()) : nullptr;
+		// Game.path is non-nullable on the Kotlin side; a null here would throw inside the constructor
+		jstring path = JNIUtils::ToJString(env, game.path.has_value() ? _pathToUtf8(game.path.value()) : std::string());
 		jobject bitmap = nullptr;
 		sint32 lastPlayedYear = 0, lastPlayedMonth = 0, lastPlayedDay = 0;
 		if (game.lastPlayed.has_value())
@@ -66,8 +69,12 @@ class AndroidGameTitleLoadedCallback : public GameTitleLoadedCallback
 		env->DeleteLocalRef(gamejobject);
 		if (bitmap != nullptr)
 			env->DeleteLocalRef(bitmap);
-		if (path != nullptr)
-			env->DeleteLocalRef(path);
+		env->DeleteLocalRef(path);
 		env->DeleteLocalRef(name);
+	}
+
+	void OnTitleRemoved(TitleId baseTitleId) override
+	{
+		JNIUtils::GetEnv()->CallVoidMethod(*m_gameTitleLoadedCallbackObj, m_onGameTitleRemovedMID, static_cast<jlong>(baseTitleId));
 	}
 };

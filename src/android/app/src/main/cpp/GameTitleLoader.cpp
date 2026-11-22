@@ -60,24 +60,39 @@ GameTitleLoader::~GameTitleLoader()
 		CafeTitleList::UnregisterCallback(m_callbackIdTitleList.value());
 }
 
+std::shared_ptr<GameTitleLoadedCallback> GameTitleLoader::GetCallback()
+{
+	// SetOnTitleLoaded can replace the callback from another thread at any time
+	std::lock_guard lock(m_threadMutex);
+	return m_gameTitleLoadedCallback;
+}
+
 void GameTitleLoader::TitleRefresh(TitleId titleId)
 {
 	using namespace std::chrono;
+	TitleId baseTitleId;
+	CafeTitleList::FindBaseTitleId(titleId, baseTitleId);
 	GameInfo2 gameInfo = CafeTitleList::GetGameInfo(titleId);
 	if (!gameInfo.IsValid())
 	{
+		// the base title is gone (deleted, or its folder removed from the game paths)
+		if (m_gameInfos.erase(baseTitleId) > 0)
+		{
+			m_iconCache.erase(baseTitleId);
+			m_name_cache.erase(baseTitleId);
+			if (auto callback = GetCallback())
+				callback->OnTitleRemoved(baseTitleId);
+		}
 		return;
 	}
-	TitleId baseTitleId = gameInfo.GetBaseTitleId();
-	bool isNewEntry = false;
-	if (auto gameInfoIt = m_gameInfos.find(baseTitleId); gameInfoIt == m_gameInfos.end())
-	{
-		isNewEntry = true;
-		m_gameInfos[baseTitleId] = Game();
-	}
+	baseTitleId = gameInfo.GetBaseTitleId();
 
 	Game& game = m_gameInfos[baseTitleId];
-	std::optional<TitleInfo> titleInfo = getFirstTitleInfoByTitleId(titleId);
+	// Describe the game by its base title, whichever of base/update/DLC triggered the refresh,
+	// so the path and name stay the same when an update or DLC is installed later.
+	std::optional<TitleInfo> titleInfo = getFirstTitleInfoByTitleId(baseTitleId);
+	if (!titleInfo.has_value())
+		titleInfo = getFirstTitleInfoByTitleId(titleId);
 	game.titleId = baseTitleId;
 	if (titleInfo.has_value())
 		game.path = titleInfo->GetPath();
@@ -87,11 +102,6 @@ void GameTitleLoader::TitleRefresh(TitleId titleId)
 	game.region = gameInfo.GetRegion();
 	game.dlc = gameInfo.GetAOCVersion();
 	std::shared_ptr<Image> icon = LoadIcon(baseTitleId, titleInfo);
-	if (!isNewEntry)
-	{
-		// TOOD: update?
-		return;
-	}
 	iosu::pdm::GameListStat playTimeStat{};
 	if (iosu::pdm::GetStatForGamelist(baseTitleId, playTimeStat))
 	{
@@ -101,13 +111,9 @@ void GameTitleLoader::TitleRefresh(TitleId titleId)
 			game.lastPlayed = year_month_day(year(playTimeStat.last_played.year), month(playTimeStat.last_played.month + 1), day(playTimeStat.last_played.day));
 		}
 	}
-	std::shared_ptr<GameTitleLoadedCallback> callback;
-	{
-		// SetOnTitleLoaded can replace the callback from another thread at any time
-		std::lock_guard lock(m_threadMutex);
-		callback = m_gameTitleLoadedCallback;
-	}
-	if (callback)
+	// Report existing entries again as well: installing an update or DLC changes the
+	// version shown in the list, which used to stay stale until the list was reloaded.
+	if (auto callback = GetCallback())
 		callback->OnTitleLoaded(game, icon);
 }
 
