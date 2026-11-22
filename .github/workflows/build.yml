@@ -167,12 +167,6 @@ jobs:
           makensis /DPRODUCT_VERSION=${{ inputs.next_version_major }}.${{ inputs.next_version_minor }} installer.nsi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cemu-bin-windows-x64
-          path: ./bin/Cemu.exe
-
-      - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: cemu-bin-windows-x64
@@ -328,7 +322,7 @@ jobs:
 
           ./gradlew assembleRelease
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cemu-bin-android
           path: ./src/android/app/build/outputs/apk/*/*.apk
