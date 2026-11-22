@@ -85,6 +85,9 @@ android {
             applicationIdSuffix = ".debug"
         }
         release {
+            // Own package name so this fork installs side by side with the official
+            // Cemu build instead of conflicting with it (different signing key).
+            applicationIdSuffix = ".fork"
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

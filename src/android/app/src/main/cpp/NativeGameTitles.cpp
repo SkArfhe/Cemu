@@ -7,6 +7,8 @@
 #include "CompressTitleCallbacks.h"
 #include "config/ActiveSettings.h"
 
+#include <unistd.h>
+
 namespace NativeGameTitles
 {
 	GameTitleLoader s_gameTitleLoader;
@@ -39,7 +41,21 @@ namespace NativeGameTitles
 		g_currentGameProfile.Load(titleId);
 	}
 
+	// The converter is polled for progress from one thread while it can be cancelled
+	// (destroyed) from another, so every access goes through this mutex.
+	std::mutex g_wuaConverterMutex;
 	std::unique_ptr<WuaConverter> g_wuaConverter;
+
+	void ReplaceWuaConverter(std::unique_ptr<WuaConverter> newConverter)
+	{
+		std::unique_ptr<WuaConverter> oldConverter;
+		{
+			std::lock_guard lock(g_wuaConverterMutex);
+			oldConverter = std::exchange(g_wuaConverter, std::move(newConverter));
+		}
+		// destroying the old converter joins its worker thread, so do it outside the lock
+		oldConverter.reset();
+	}
 } // namespace NativeGameTitles
 
 extern "C" [[maybe_unused]] JNIEXPORT jboolean JNICALL
@@ -114,7 +130,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getDriverSettingForTitle(JN
 	jstring customPath = nullptr;
 	if (driverSetting.customPath.has_value())
 	{
-		customPath = env->NewStringUTF(driverSetting.customPath.value().c_str());
+		customPath = JNIUtils::ToJString(env, driverSetting.customPath.value());
 	}
 
 	jint mode = static_cast<jint>(driverSetting.mode);
@@ -178,8 +194,9 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_setGameTitleLoadedCallback(
 	}
 	jclass gameTitleLoadedCallbackClass = env->GetObjectClass(game_title_loaded_callback);
 	jmethodID onGameTitleLoadedMID = env->GetMethodID(gameTitleLoadedCallbackClass, "onGameTitleLoaded", "(Linfo/cemu/cemu/nativeinterface/NativeGameTitles$Game;)V");
+	jmethodID onGameTitleRemovedMID = env->GetMethodID(gameTitleLoadedCallbackClass, "onGameTitleRemoved", "(J)V");
 	env->DeleteLocalRef(gameTitleLoadedCallbackClass);
-	NativeGameTitles::s_gameTitleLoader.SetOnTitleLoaded(std::make_shared<AndroidGameTitleLoadedCallback>(onGameTitleLoadedMID, game_title_loaded_callback));
+	NativeGameTitles::s_gameTitleLoader.SetOnTitleLoaded(std::make_shared<AndroidGameTitleLoadedCallback>(onGameTitleLoadedMID, onGameTitleRemovedMID, game_title_loaded_callback));
 }
 
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
@@ -417,8 +434,9 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_checkIfTitleExists(JNIEnv* 
 		TitleIdParser tip(titleInfo.GetAppTitleId());
 		TitleIdParser tipOther(tmp.GetAppTitleId());
 
-		jint oldType = static_cast<jint>(tip.GetType());
-		jint toInstallType = static_cast<jint>(tipOther.GetType());
+		// tip describes the title being installed, tipOther the one already at the target location
+		jint oldType = static_cast<jint>(tipOther.GetType());
+		jint toInstallType = static_cast<jint>(tip.GetType());
 		if (oldType != toInstallType)
 		{
 			return createTitleExistsStatus(
@@ -480,8 +498,10 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_queueTitleToCompress(JNIEnv
 			jobject title = env->GetObjectArrayElement(titlesJava, i);
 			uint64 uid = env->GetLongField(title, titleUIDFieldId);
 			uint16 version = env->GetShortField(title, versionFieldId);
+			env->DeleteLocalRef(title);
 			titles.push_back(Title{.uid = uid, .version = version});
 		}
+		env->DeleteLocalRef(titlesJava);
 		return titles;
 	};
 
@@ -544,7 +564,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_queueTitleToCompress(JNIEnv
 			break;
 	}
 
-	NativeGameTitles::g_wuaConverter = std::make_unique<WuaConverter>(titleInfo_base, titleInfo_update, titleInfo_aoc);
+	NativeGameTitles::ReplaceWuaConverter(std::make_unique<WuaConverter>(titleInfo_base, titleInfo_update, titleInfo_aoc));
 
 	jobject compressTitleInfo = JNIUtils::NewObject(
 		env,
@@ -559,6 +579,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_queueTitleToCompress(JNIEnv
 extern "C" [[maybe_unused]] JNIEXPORT jstring JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCompressedFileNameForQueuedTitle(JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
+	std::lock_guard lock(NativeGameTitles::g_wuaConverterMutex);
 	if (NativeGameTitles::g_wuaConverter == nullptr)
 		return nullptr;
 	return JNIUtils::ToJString(env, NativeGameTitles::g_wuaConverter->GetCompressedFileName());
@@ -567,8 +588,15 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCompressedFileNameForQue
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_compressQueuedTitle([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz, jint fd, jobject compressTitleCallbacks)
 {
+	std::lock_guard lock(NativeGameTitles::g_wuaConverterMutex);
 	if (NativeGameTitles::g_wuaConverter == nullptr)
+	{
+		// the descriptor was detached on the Java side, nobody else will close it
+		if (fd != -1)
+			close(fd);
+		CompressTitleCallbacks(compressTitleCallbacks).OnError();
 		return;
+	}
 
 	NativeGameTitles::g_wuaConverter->StartConversion(fd, std::make_unique<CompressTitleCallbacks>(compressTitleCallbacks));
 }
@@ -576,10 +604,12 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_compressQueuedTitle([[maybe
 extern "C" [[maybe_unused]] JNIEXPORT jobject JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentProgressForCompression(JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
+	std::unique_lock lock(NativeGameTitles::g_wuaConverterMutex);
 	if (NativeGameTitles::g_wuaConverter == nullptr)
 		return nullptr;
 
 	auto [current, total] = NativeGameTitles::g_wuaConverter->GetTransferredInputBytes();
+	lock.unlock();
 
 	static auto [progressClass, ctrMID] = [env] {
 		jclass progressClass = env->FindClass("info/cemu/cemu/nativeinterface/NativeGameTitles$CompressionProgress");
@@ -596,6 +626,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentProgressForCompre
 extern "C" [[maybe_unused]] JNIEXPORT jint JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentCompressionStage([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
+	std::lock_guard lock(NativeGameTitles::g_wuaConverterMutex);
 	if (NativeGameTitles::g_wuaConverter == nullptr)
 		return static_cast<jint>(Stage::CANCELLED);
 
@@ -605,6 +636,7 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentCompressionStage(
 extern "C" [[maybe_unused]] JNIEXPORT jint JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentCompressionTotalFileCount([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
+	std::lock_guard lock(NativeGameTitles::g_wuaConverterMutex);
 	if (NativeGameTitles::g_wuaConverter == nullptr)
 		return 0L;
 
@@ -614,7 +646,5 @@ Java_info_cemu_cemu_nativeinterface_NativeGameTitles_getCurrentCompressionTotalF
 extern "C" [[maybe_unused]] JNIEXPORT void JNICALL
 Java_info_cemu_cemu_nativeinterface_NativeGameTitles_cancelTitleCompression([[maybe_unused]] JNIEnv* env, [[maybe_unused]] jclass clazz)
 {
-	if (NativeGameTitles::g_wuaConverter == nullptr)
-		return;
-	NativeGameTitles::g_wuaConverter.reset();
+	NativeGameTitles::ReplaceWuaConverter(nullptr);
 }

@@ -9,19 +9,20 @@ struct Game
 {
 	std::string name;
 	std::optional<fs::path> path;
-	bool isFavorite;
-	uint16 version;
-	uint16 dlc;
-	TitleId titleId;
+	bool isFavorite = false;
+	uint16 version = 0;
+	uint16 dlc = 0;
+	TitleId titleId = 0;
 	std::optional<std::chrono::year_month_day> lastPlayed;
-	uint32 minutesPlayed;
-	CafeConsoleRegion region;
+	uint32 minutesPlayed = 0;
+	CafeConsoleRegion region{};
 };
 
 class GameTitleLoadedCallback
 {
   public:
 	virtual void OnTitleLoaded(const Game& game, const std::shared_ptr<Image>& icon) = 0;
+	virtual void OnTitleRemoved(TitleId baseTitleId) = 0;
 };
 
 class GameTitleLoader
@@ -31,6 +32,7 @@ class GameTitleLoader
 	std::thread m_loaderThread;
 	std::atomic_bool m_continueLoading = true;
 	std::deque<TitleId> m_titlesToLoad;
+	bool m_clearGameInfos = false; // guarded by m_threadMutex
 	std::optional<uint64> m_callbackIdTitleList;
 	std::map<TitleId, Game> m_gameInfos;
 	std::map<TitleId, std::shared_ptr<Image>> m_iconCache;
@@ -47,6 +49,7 @@ class GameTitleLoader
 
   private:
 	void LoadGameTitles();
+	std::shared_ptr<GameTitleLoadedCallback> GetCallback();
 	std::string GetNameByTitleId(TitleId titleId, const std::optional<TitleInfo>& titleInfo);
 	std::shared_ptr<Image> LoadIcon(TitleId titleId, const std::optional<TitleInfo>& titleInfo);
 	void HandleTitleListCallback(CafeTitleListCallbackEvent* evt);

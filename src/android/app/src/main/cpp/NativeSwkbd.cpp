@@ -6,7 +6,27 @@ namespace NativeSwkbd
 {
 	std::atomic<bool> s_isOpen;
 
-	std::string s_currentInputText;
+	// Kept in UTF-16, like the game's text buffer, so that one character typed on
+	// Android maps to exactly one swkbd key press (and one backspace removes one character).
+	std::u16string s_currentInputText;
+
+	std::u16string FromJStringUtf16(JNIEnv* env, jstring jstr)
+	{
+		if (jstr == nullptr)
+			return {};
+		const jsize length = env->GetStringLength(jstr);
+		const jchar* chars = env->GetStringChars(jstr, nullptr);
+		if (chars == nullptr)
+			return {};
+		std::u16string str(reinterpret_cast<const char16_t*>(chars), static_cast<size_t>(length));
+		env->ReleaseStringChars(jstr, chars);
+		return str;
+	}
+
+	jstring ToJStringUtf16(JNIEnv* env, const std::u16string& str)
+	{
+		return env->NewString(reinterpret_cast<const jchar*>(str.data()), static_cast<jsize>(str.size()));
+	}
 
 	struct StrDiffs
 	{
@@ -14,7 +34,7 @@ namespace NativeSwkbd
 		size_t numberOfCharacterToDelete;
 	};
 
-	StrDiffs GetStringDiffs(const std::string& newText, const std::string& currentText)
+	StrDiffs GetStringDiffs(const std::u16string& newText, const std::u16string& currentText)
 	{
 		if (newText.length() < currentText.length() && currentText.starts_with(newText))
 			return {newText.length(), currentText.length() - newText.length()};
@@ -38,14 +58,14 @@ namespace NativeSwkbd
 			m_hideSoftwareKeyboardMethodID = env->GetStaticMethodID(*m_emulationActivityClass, "hide", "()V");
 		}
 
-		void showSoftwareKeyboard(const std::string& initialText, sint32 maxLength) override
+		void showSoftwareKeyboard(const std::u16string& initialText, sint32 maxLength) override
 		{
 			s_isOpen = true;
 
 			s_currentInputText = initialText;
 
 			JNIUtils::FiberSafeJNICall([&](JNIEnv* env) {
-				jstring j_initialText = JNIUtils::ToJString(env, initialText);
+				jstring j_initialText = ToJStringUtf16(env, initialText);
 				JNIUtils::GetEnv()->CallStaticVoidMethod(*m_emulationActivityClass, m_showSoftwareKeyboardMethodID, j_initialText, maxLength);
 				env->DeleteLocalRef(j_initialText);
 			});
@@ -80,12 +100,12 @@ Java_info_cemu_cemu_nativeinterface_NativeSwkbd_onTextChanged([[maybe_unused]] J
 	if (!NativeSwkbd::s_isOpen)
 		return;
 
-	std::string text = JNIUtils::FromJString(env, j_text);
+	std::u16string text = NativeSwkbd::FromJStringUtf16(env, j_text);
 	auto stringDiff = NativeSwkbd::GetStringDiffs(text, NativeSwkbd::s_currentInputText);
 	for (size_t i = 0; i < stringDiff.numberOfCharacterToDelete; i++)
 		swkbd::keyInput(swkbd::BACKSPACE_KEYCODE);
 	for (size_t i = stringDiff.newTextStartIndex; i < text.length(); i++)
-		swkbd::keyInput(text.at(i));
+		swkbd::keyInput(static_cast<uint32>(text.at(i)));
 	NativeSwkbd::s_currentInputText = std::move(text);
 }
 

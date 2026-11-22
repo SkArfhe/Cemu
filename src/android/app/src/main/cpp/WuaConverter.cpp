@@ -1,5 +1,8 @@
 #include "WuaConverter.h"
 
+#include <cerrno>
+#include <unistd.h>
+
 WuaConverter::WuaConverter(const TitleInfo& titleInfo_base, const TitleInfo& titleInfo_update, const TitleInfo& titleInfo_aoc)
 	: m_titleInfo_base{titleInfo_base},
 	  m_titleInfo_update{titleInfo_update},
@@ -15,6 +18,17 @@ WuaConverter::~WuaConverter()
 
 void WuaConverter::StartConversion(int fd, std::unique_ptr<CompressTitleCallbacks>&& callbacks)
 {
+	// Assigning to a joinable std::thread calls std::terminate, so a second
+	// request for the same queued title must be rejected here, on the caller's thread.
+	if (m_started)
+	{
+		if (fd != -1)
+			close(fd);
+		callbacks->OnError();
+		return;
+	}
+	m_started = true;
+
 	m_workerThread = std::thread([callbacks(std::move(callbacks)), fd, this]() {
 		if (fd == -1)
 		{
@@ -22,10 +36,13 @@ void WuaConverter::StartConversion(int fd, std::unique_ptr<CompressTitleCallback
 			return;
 		}
 
-		if (m_started)
-			return;
-
-		m_started = true;
+		// The Java side detaches the descriptor, so it is ours to close on every exit path.
+		// Closing it is also what lets document providers commit the written file.
+		struct FdCloser
+		{
+			int fd;
+			~FdCloser() { close(fd); }
+		} fdCloser{fd};
 
 		std::vector<TitleInfo*> titlesToConvert;
 		if (m_titleInfo_base.IsValid())
@@ -50,8 +67,25 @@ void WuaConverter::StartConversion(int fd, std::unique_ptr<CompressTitleCallback
 			static void WriteOutputData(const void* data, size_t length, void* _ctx)
 			{
 				ZArchiveWriterContext* ctx = (ZArchiveWriterContext*)_ctx;
-				auto written = write(ctx->fd, data, length);
-				int temp = 10;
+				if (ctx->writeFailed)
+					return;
+				// write() may write fewer bytes than requested or be interrupted,
+				// so keep writing until everything is out or a real error occurs.
+				auto bytes = static_cast<const uint8*>(data);
+				while (length > 0)
+				{
+					ssize_t written = write(ctx->fd, bytes, length);
+					if (written <= 0)
+					{
+						if (written < 0 && errno == EINTR)
+							continue;
+						cemuLog_log(LogType::Force, "WUA conversion: failed to write output file (errno {})", errno);
+						ctx->writeFailed = true;
+						return;
+					}
+					bytes += written;
+					length -= static_cast<size_t>(written);
+				}
 			}
 
 			bool RecursivelyCountFiles(const std::string& fscPath)
@@ -176,6 +210,7 @@ void WuaConverter::StartConversion(int fd, std::unique_ptr<CompressTitleCallback
 			int fd;
 			ZArchiveWriter* zaWriter{};
 			bool isValid{false};
+			bool writeFailed{false};
 			std::vector<uint8> transferBuffer;
 			std::atomic_bool& cancelled;
 			// progress
@@ -213,13 +248,20 @@ void WuaConverter::StartConversion(int fd, std::unique_ptr<CompressTitleCallback
 
 		m_stage = Stage::FINALIZING;
 
-		if (!result)
+		if (!result || writerContext.writeFailed)
 		{
 			callbacks->OnError();
 			return;
 		}
 
 		writerContext.zaWriter->Finalize();
+
+		// a failed write (for example a full disk) leaves a corrupted archive behind
+		if (writerContext.writeFailed || (fsync(fd) != 0 && errno != EINVAL && errno != EROFS))
+		{
+			callbacks->OnError();
+			return;
+		}
 
 		off_t newPos = lseek(fd, 0, SEEK_SET);
 		if (newPos == -1)

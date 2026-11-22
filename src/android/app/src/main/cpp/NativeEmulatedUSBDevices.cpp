@@ -75,11 +75,12 @@ namespace NativeEmulatedUSBDevices
 			figureClass,
 			installedFigures,
 			[&](auto&& figurePath) {
-				return env->NewObject(
-					figureClass,
-					ctrMID,
-					env->NewStringUTF(figurePath.stem().c_str()),
-					env->NewStringUTF(figurePath.c_str()));
+				jstring name = JNIUtils::ToJString(env, _pathToUtf8(figurePath.stem()));
+				jstring path = JNIUtils::ToJString(env, _pathToUtf8(figurePath));
+				jobject figure = env->NewObject(figureClass, ctrMID, name, path);
+				env->DeleteLocalRef(name);
+				env->DeleteLocalRef(path);
+				return figure;
 			});
 	}
 

@@ -1,0 +1,30 @@
+name: Sync with upstream (SSimco/Cemu)
+
+# Keeps this fork's android-port branch up to date with the original Android port,
+# so it does not fall behind the way the Producdevity copy did.
+#
+# If this run fails, GitHub could not merge automatically: either the changes
+# conflict with this fork's own commits, or upstream changed files under
+# .github/workflows, which the Actions token is not allowed to modify. In both
+# cases use "Sync fork" on the repository page, or ask for help resolving it.
+
+on:
+  schedule:
+    - cron: "17 9 * * 1" # Mondays, 06:17 in Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.repository_owner == 'SkArfhe'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Merge upstream android-port
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/merge-upstream" \
+            -f branch=android-port \
+            --jq '"\(.merge_type): \(.message)"'

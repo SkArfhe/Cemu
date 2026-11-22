@@ -4,12 +4,20 @@ on:
     inputs:
       version_major:
         description: Version major
-        required: false
+        required: true
+        default: "2"
         type: string
       version_minor:
         description: Version minor
-        required: false
+        required: true
+        default: "0"
         type: string
+
+# The release step creates a tag and a GitHub release, and vcpkg pushes its
+# binary cache to GitHub Packages. Forks default to a read-only token.
+permissions:
+  contents: write
+  packages: write
 
 env:
   VCPKG_ROOT: "${{github.workspace}}/dependencies/vcpkg"

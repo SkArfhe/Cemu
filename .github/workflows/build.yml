@@ -167,12 +167,6 @@ jobs:
           makensis /DPRODUCT_VERSION=${{ inputs.next_version_major }}.${{ inputs.next_version_minor }} installer.nsi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cemu-bin-windows-x64
-          path: ./bin/Cemu.exe
-
-      - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: cemu-bin-windows-x64
@@ -186,6 +180,8 @@ jobs:
             inputs.next_version_minor }}-windows-x64-installer.exe
 
   build-macos:
+    # macOS runners are not available to this fork, so these jobs only ever got cancelled
+    if: github.repository_owner != 'SkArfhe'
     runs-on: macos-14
     strategy:
       matrix:
@@ -327,8 +323,9 @@ jobs:
           fi
 
           ./gradlew assembleRelease
-      # - name: Upload artifact
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: cemu-bin-android
-      #     path: ./src/android/app/build/outputs/apk/*/*.apk
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: cemu-bin-android
+          path: ./src/android/app/build/outputs/apk/*/*.apk
+          if-no-files-found: error
