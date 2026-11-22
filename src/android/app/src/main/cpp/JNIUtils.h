@@ -6,19 +6,35 @@ namespace JNIUtils
 {
 	void SetJavaVM(JavaVM* jvm);
 
+	// JNI's *StringUTF* functions use "modified UTF-8", which encodes characters outside the
+	// Basic Multilingual Plane (emoji, some CJK) differently from standard UTF-8. Paths and
+	// names containing them were corrupted, and CheckJNI aborts on standard 4-byte sequences.
+	// Convert through UTF-16 instead, which is what Java strings actually store.
+	std::string Utf16ToUtf8(const char16_t* data, size_t length);
+	std::u16string Utf8ToUtf16(std::string_view str);
+
 	inline std::string FromJString(JNIEnv* env, jstring jstr)
 	{
 		if (jstr == nullptr)
 			return {};
-		const char* c_str = env->GetStringUTFChars(jstr, nullptr);
-		std::string str(c_str);
-		env->ReleaseStringUTFChars(jstr, c_str);
+		const jsize length = env->GetStringLength(jstr);
+		const jchar* chars = env->GetStringChars(jstr, nullptr);
+		if (chars == nullptr)
+			return {};
+		std::string str = Utf16ToUtf8(reinterpret_cast<const char16_t*>(chars), static_cast<size_t>(length));
+		env->ReleaseStringChars(jstr, chars);
 		return str;
 	}
 
 	inline jstring ToJString(JNIEnv* env, const std::string& str)
 	{
-		return env->NewStringUTF(str.c_str());
+		std::u16string utf16 = Utf8ToUtf16(str);
+		return env->NewString(reinterpret_cast<const jchar*>(utf16.data()), static_cast<jsize>(utf16.size()));
+	}
+
+	inline jstring ToJString(JNIEnv* env, const char* str)
+	{
+		return ToJString(env, std::string(str ? str : ""));
 	}
 
 	inline jstring ToJString(JNIEnv* env, std::string_view str)
