@@ -2,6 +2,7 @@ package info.cemu.cemu.titlemanager.usecases
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import info.cemu.cemu.nativeinterface.NativeGameTitles
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,10 +46,31 @@ class CompressTitleUseCase(private val scope: CoroutineScope) {
     private var compressJob: Job? = null
     private var progressJob: Job? = null
 
+    // The output document of the running compression, deleted again if the
+    // compression fails or is cancelled so no truncated .wua file is left behind.
+    @Volatile
+    private var outputDocument: Pair<Context, Uri>? = null
+
+    @Volatile
+    private var compressionFinished = false
+
+    private fun deleteOutputDocument() {
+        val (context, uri) = outputDocument ?: return
+        outputDocument = null
+        try {
+            DocumentsContract.deleteDocument(context.contentResolver, uri)
+        } catch (_: Exception) {
+            // the provider may not support deleting; nothing else we can do
+        }
+    }
 
     fun cancel() {
         scope.launch(Dispatchers.IO) {
+            // returns after the native worker has stopped and closed the file
             NativeGameTitles.cancelTitleCompression()
+            if (!compressionFinished) {
+                deleteOutputDocument()
+            }
         }
     }
 
@@ -67,7 +89,12 @@ class CompressTitleUseCase(private val scope: CoroutineScope) {
             null
         }
 
+        compressionFinished = false
+        outputDocument = context.applicationContext to uri
+
         if (fd == null) {
+            // the picker already created an empty document; don't leave it behind
+            scope.launch(Dispatchers.IO) { deleteOutputDocument() }
             callback(CompressResult.ERROR)
             return
         }
@@ -117,14 +144,23 @@ class CompressTitleUseCase(private val scope: CoroutineScope) {
                         progressJob?.cancel()
 
                         when (result) {
-                            NativeCompressResult.FINISHED -> callback(CompressResult.FINISHED)
-                            NativeCompressResult.ERROR -> callback(CompressResult.ERROR)
+                            NativeCompressResult.FINISHED -> {
+                                compressionFinished = true
+                                outputDocument = null
+                                callback(CompressResult.FINISHED)
+                            }
+
+                            NativeCompressResult.ERROR -> {
+                                scope.launch(Dispatchers.IO) { deleteOutputDocument() }
+                                callback(CompressResult.ERROR)
+                            }
                         }
 
                         _stage.value = null
                     }
                 )
             } catch (_: Exception) {
+                scope.launch(Dispatchers.IO) { deleteOutputDocument() }
                 callback(CompressResult.ERROR)
                 _stage.value = null
             }
